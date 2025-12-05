@@ -267,10 +267,12 @@ export class WebSocketClient {
     }
 
     private getHttpBaseUrl(): string | null {
-        if (!this.store) return null
+        const socketState = this.store?.state.socket
+        if (!socketState) return null
 
-        const httpProtocol = this.store.state.socket.protocol === 'wss' ? 'https' : 'http'
-        const baseUrl = this.store.getters['socket/getUrl'] as string
+        const httpProtocol = socketState.protocol === 'wss' ? 'https' : 'http'
+        const baseUrl = this.store?.getters['socket/getUrl'] as string
+        if (!baseUrl) return null
 
         return `${httpProtocol}:${baseUrl}`
     }
@@ -301,8 +303,10 @@ export class WebSocketClient {
 
             this.shouldReconnect = true
             this.authRedirectUrl = null
-            if (this.store.state.socket.authFailed)
+
+            if (this.store?.state.socket?.authFailed) {
                 this.store.dispatch('socket/setData', { authFailed: false, connectionFailedMessage: null })
+            }
 
             return true
         } catch (error) {
