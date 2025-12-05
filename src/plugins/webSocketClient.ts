@@ -15,6 +15,8 @@ export class WebSocketClient {
     store: Store<RootState> | null = null
     waits: Wait[] = []
     heartbeatTimer: number | null = null
+    shouldReconnect = true
+    authRedirectUrl: string | null = null
 
     constructor(options: WebSocketPluginOptions) {
         this.url = options.url
@@ -93,17 +95,32 @@ export class WebSocketClient {
     async connect() {
         this.store?.dispatch('socket/setData', {
             isConnecting: true,
+            connectingFailed: false,
+            authFailed: false,
         })
+
+        const authCheckPassed = await this.runAuthCheck()
+        if (!authCheckPassed) return
 
         this.instance?.close()
         this.instance = new WebSocket(this.url)
 
-        this.instance.onopen = () => {
+        this.instance.onopen = (event) => {
             this.reconnects = 0
             this.store?.dispatch('socket/onOpen', event)
         }
 
-        this.instance.onclose = (e) => {
+        this.instance.onclose = async (e) => {
+            if (!this.shouldReconnect) {
+                this.store?.dispatch('socket/onClose', e)
+                return
+            }
+
+            if (this.isAuthRelatedCloseCode(e.code)) {
+                const authCheck = await this.runAuthCheck()
+                if (!authCheck) return
+            }
+
             if (e.wasClean || this.reconnects >= this.maxReconnects) {
                 this.store?.dispatch('socket/onClose', e)
                 return
@@ -243,6 +260,54 @@ export class WebSocketClient {
             this.close()
             this.store?.dispatch('socket/onClose')
         }, 10000)
+    }
+
+    private isAuthRelatedCloseCode(code: number): boolean {
+        return code === 1006 || code === 1008
+    }
+
+    private getHttpBaseUrl(): string | null {
+        if (!this.store) return null
+
+        const httpProtocol = this.store.state.socket.protocol === 'wss' ? 'https' : 'http'
+        const baseUrl = this.store.getters['socket/getUrl'] as string
+
+        return `${httpProtocol}:${baseUrl}`
+    }
+
+    private async runAuthCheck(): Promise<boolean> {
+        const baseUrl = this.getHttpBaseUrl()
+        if (!baseUrl) return true
+
+        const authUrl = `${baseUrl}/api/version`
+
+        try {
+            const response = await fetch(authUrl, { credentials: 'include' })
+
+            if (
+                response.redirected ||
+                (response.status >= 300 && response.status < 400) ||
+                response.status === 401 ||
+                response.status === 403
+            ) {
+                const redirectTarget = response.url || baseUrl
+                this.authRedirectUrl = redirectTarget
+                this.shouldReconnect = false
+                this.store?.dispatch('socket/setAuthFailed', 'Authentication required')
+                window.location.href = redirectTarget
+
+                return false
+            }
+
+            this.shouldReconnect = true
+            this.authRedirectUrl = null
+            if (this.store.state.socket.authFailed)
+                this.store.dispatch('socket/setData', { authFailed: false, connectionFailedMessage: null })
+
+            return true
+        } catch (error) {
+            return true
+        }
     }
 }
 

@@ -177,4 +177,8 @@ export const actions: ActionTree<SocketState, RootState> = {
     setConnectionFailed({ commit }, payload) {
         commit('setDisconnected', payload)
     },
+
+    setAuthFailed({ commit }, payload?: string) {
+        commit('setAuthFailed', payload)
+    },
 }

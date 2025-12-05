@@ -21,6 +21,7 @@ export const getDefaultState = (): SocketState => {
         isConnecting: false,
         connectingFailed: false,
         connectionFailedMessage: null,
+        authFailed: false,
         loadings: [],
         initializationList: ['server'],
         connection_id: null,
