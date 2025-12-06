@@ -284,15 +284,16 @@ export class WebSocketClient {
         const authUrl = `${baseUrl}/api/version`
 
         try {
-            const response = await fetch(authUrl, { credentials: 'include' })
+            const response = await fetch(authUrl, { credentials: 'include', redirect: 'manual' })
 
             if (
+                response.type === 'opaqueredirect' ||
                 response.redirected ||
                 (response.status >= 300 && response.status < 400) ||
                 response.status === 401 ||
                 response.status === 403
             ) {
-                const redirectTarget = response.url || baseUrl
+                const redirectTarget = response.url || this.authRedirectUrl || baseUrl
                 this.authRedirectUrl = redirectTarget
                 this.shouldReconnect = false
                 this.store?.dispatch('socket/setAuthFailed', 'Authentication required')
