@@ -298,13 +298,24 @@ export class WebSocketClient {
                 response.status === 401 ||
                 response.status === 403
             ) {
-                const redirectTarget = response.url || this.authRedirectUrl || baseUrl
+                const locationHeader = response.headers.get('Location') ?? response.headers.get('location')
+                let resolvedHeaderUrl: string | null = null
+                if (locationHeader) {
+                    try {
+                        resolvedHeaderUrl = new URL(locationHeader, authUrl).toString()
+                    } catch (error) {
+                        window.console.warn('[socket] Failed to resolve auth redirect location header', locationHeader, error)
+                    }
+                }
+                const redirectTarget = response.url || resolvedHeaderUrl || this.authRedirectUrl || baseUrl
                 this.authRedirectUrl = redirectTarget
                 this.shouldReconnect = false
                 window.console.warn('[socket] Auth check failed; redirecting to login target', redirectTarget, {
                     status: response.status,
                     redirected: response.redirected,
                     type: response.type,
+                    locationHeader,
+                    resolvedHeaderUrl,
                 })
                 this.store?.dispatch('socket/setAuthFailed', 'Authentication required')
                 window.location.href = redirectTarget
