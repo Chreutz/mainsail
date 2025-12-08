@@ -117,6 +117,7 @@ export class WebSocketClient {
             }
 
             if (this.isAuthRelatedCloseCode(e.code)) {
+                window.console.warn('[socket] WebSocket closed with auth-related code; rerunning auth check', e.code)
                 const authCheck = await this.runAuthCheck()
                 if (!authCheck) return
             }
@@ -279,11 +280,15 @@ export class WebSocketClient {
 
     private async runAuthCheck(): Promise<boolean> {
         const baseUrl = this.getHttpBaseUrl()
-        if (!baseUrl) return true
+        if (!baseUrl) {
+            window.console.info('[socket] Skipping auth precheck: missing base URL')
+            return true
+        }
 
         const authUrl = `${baseUrl}/api/version`
 
         try {
+            window.console.info('[socket] Running auth precheck against', authUrl)
             const response = await fetch(authUrl, { credentials: 'include', redirect: 'manual' })
 
             if (
@@ -296,6 +301,11 @@ export class WebSocketClient {
                 const redirectTarget = response.url || this.authRedirectUrl || baseUrl
                 this.authRedirectUrl = redirectTarget
                 this.shouldReconnect = false
+                window.console.warn('[socket] Auth check failed; redirecting to login target', redirectTarget, {
+                    status: response.status,
+                    redirected: response.redirected,
+                    type: response.type,
+                })
                 this.store?.dispatch('socket/setAuthFailed', 'Authentication required')
                 window.location.href = redirectTarget
 
@@ -309,8 +319,11 @@ export class WebSocketClient {
                 this.store.dispatch('socket/setData', { authFailed: false, connectionFailedMessage: null })
             }
 
+            window.console.info('[socket] Auth precheck passed')
+
             return true
         } catch (error) {
+            window.console.error('[socket] Auth precheck encountered an error; proceeding to connect', error)
             return true
         }
     }
