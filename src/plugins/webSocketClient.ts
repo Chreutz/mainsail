@@ -15,6 +15,8 @@ export class WebSocketClient {
     store: Store<RootState> | null = null
     waits: Wait[] = []
     heartbeatTimer: number | null = null
+    shouldReconnect = true
+    authRedirectUrl: string | null = null
 
     constructor(options: WebSocketPluginOptions) {
         this.url = options.url
@@ -93,17 +95,33 @@ export class WebSocketClient {
     async connect() {
         this.store?.dispatch('socket/setData', {
             isConnecting: true,
+            connectingFailed: false,
+            authFailed: false,
         })
+
+        const authCheckPassed = await this.runAuthCheck()
+        if (!authCheckPassed) return
 
         this.instance?.close()
         this.instance = new WebSocket(this.url)
 
-        this.instance.onopen = () => {
+        this.instance.onopen = (event) => {
             this.reconnects = 0
             this.store?.dispatch('socket/onOpen', event)
         }
 
-        this.instance.onclose = (e) => {
+        this.instance.onclose = async (e) => {
+            if (!this.shouldReconnect) {
+                this.store?.dispatch('socket/onClose', e)
+                return
+            }
+
+            if (this.isAuthRelatedCloseCode(e.code)) {
+                window.console.warn('[socket] WebSocket closed with auth-related code; rerunning auth check', e.code)
+                const authCheck = await this.runAuthCheck()
+                if (!authCheck) return
+            }
+
             if (e.wasClean || this.reconnects >= this.maxReconnects) {
                 this.store?.dispatch('socket/onClose', e)
                 return
@@ -243,6 +261,92 @@ export class WebSocketClient {
             this.close()
             this.store?.dispatch('socket/onClose')
         }, 10000)
+    }
+
+    private isAuthRelatedCloseCode(code: number): boolean {
+        return code === 1006 || code === 1008
+    }
+
+    private getHttpBaseUrl(): string | null {
+        const socketState = this.store?.state.socket
+        if (!socketState) return null
+
+        const httpProtocol = socketState.protocol === 'wss' ? 'https' : 'http'
+        const baseUrl = this.store?.getters['socket/getUrl'] as string
+        if (!baseUrl) return null
+
+        return `${httpProtocol}:${baseUrl}`
+    }
+
+    private async runAuthCheck(): Promise<boolean> {
+        const baseUrl = this.getHttpBaseUrl()
+        if (!baseUrl) {
+            window.console.info('[socket] Skipping auth precheck: missing base URL')
+            return true
+        }
+
+        const authUrl = `${baseUrl}/api/version`
+
+        try {
+            window.console.info('[socket] Running auth precheck against', authUrl)
+            const response = await fetch(authUrl, { credentials: 'include', redirect: 'manual' })
+
+            if (
+                response.type === 'opaqueredirect' ||
+                response.redirected ||
+                (response.status >= 300 && response.status < 400) ||
+                response.status === 401 ||
+                response.status === 403
+            ) {
+                const locationHeader = response.headers.get('Location') ?? response.headers.get('location')
+                let resolvedHeaderUrl: string | null = null
+                if (locationHeader) {
+                    try {
+                        resolvedHeaderUrl = new URL(locationHeader, authUrl).toString()
+                    } catch (error) {
+                        window.console.warn('[socket] Failed to resolve auth redirect location header', locationHeader, error)
+                    }
+                }
+
+                // Avoid redirecting back to the auth probe endpoint (e.g., opaqueredirect without Location)
+                const responseUrl = response.url && response.url !== authUrl ? response.url : null
+                const fallbackBase = new URL(baseUrl)
+                fallbackBase.pathname = fallbackBase.pathname || '/'
+                if (!fallbackBase.pathname.endsWith('/')) fallbackBase.pathname += '/'
+                const fallbackTarget = fallbackBase.toString()
+
+                const redirectTarget = resolvedHeaderUrl || responseUrl || this.authRedirectUrl || fallbackTarget
+                this.authRedirectUrl = redirectTarget
+                this.shouldReconnect = false
+                window.console.warn('[socket] Auth check failed; redirecting to login target', redirectTarget, {
+                    status: response.status,
+                    redirected: response.redirected,
+                    type: response.type,
+                    locationHeader,
+                    resolvedHeaderUrl,
+                    responseUrl,
+                    fallbackTarget,
+                })
+                this.store?.dispatch('socket/setAuthFailed', 'Authentication required')
+                window.location.href = redirectTarget
+
+                return false
+            }
+
+            this.shouldReconnect = true
+            this.authRedirectUrl = null
+
+            if (this.store?.state.socket?.authFailed) {
+                this.store.dispatch('socket/setData', { authFailed: false, connectionFailedMessage: null })
+            }
+
+            window.console.info('[socket] Auth precheck passed')
+
+            return true
+        } catch (error) {
+            window.console.error('[socket] Auth precheck encountered an error; proceeding to connect', error)
+            return true
+        }
     }
 }
 
