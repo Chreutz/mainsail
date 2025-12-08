@@ -307,7 +307,15 @@ export class WebSocketClient {
                         window.console.warn('[socket] Failed to resolve auth redirect location header', locationHeader, error)
                     }
                 }
-                const redirectTarget = response.url || resolvedHeaderUrl || this.authRedirectUrl || baseUrl
+
+                // Avoid redirecting back to the auth probe endpoint (e.g., opaqueredirect without Location)
+                const responseUrl = response.url && response.url !== authUrl ? response.url : null
+                const fallbackBase = new URL(baseUrl)
+                fallbackBase.pathname = fallbackBase.pathname || '/'
+                if (!fallbackBase.pathname.endsWith('/')) fallbackBase.pathname += '/'
+                const fallbackTarget = fallbackBase.toString()
+
+                const redirectTarget = resolvedHeaderUrl || responseUrl || this.authRedirectUrl || fallbackTarget
                 this.authRedirectUrl = redirectTarget
                 this.shouldReconnect = false
                 window.console.warn('[socket] Auth check failed; redirecting to login target', redirectTarget, {
@@ -316,6 +324,8 @@ export class WebSocketClient {
                     type: response.type,
                     locationHeader,
                     resolvedHeaderUrl,
+                    responseUrl,
+                    fallbackTarget,
                 })
                 this.store?.dispatch('socket/setAuthFailed', 'Authentication required')
                 window.location.href = redirectTarget
